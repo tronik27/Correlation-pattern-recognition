@@ -5,12 +5,19 @@ import tensorflow as tf
 import os
 from abc import ABC, abstractmethod
 import pandas as pd
-from typing import Tuple
+from typing import Tuple, Any
 
 
 class CorrelationFilterDataset(ABC):
-    def __init__(self, gt_label=0, num_of_images=None, inverse=False, batch_size=32):
-        self.gt_label = gt_label
+    def __init__(self, pos_class_label: int, batch_size: int = 32, num_of_images=None, inverse: bool = False) -> None:
+        """
+        Correlation filters dataset base class.
+        :param pos_class_label: positive class label.
+        :param inverse: parameter indicating whether to inverse image during preprocessing or not.
+        :param num_of_images: number of images for the training set.
+        :param batch_size: number of images in batch.
+        """
+        self.gt_label = pos_class_label
         self.num_of_images = num_of_images
         self.inverse = inverse
         self.batch_size = batch_size
@@ -23,12 +30,28 @@ class CorrelationFilterDataset(ABC):
     def prepare_data_from_directory(self, *args, **kwargs):
         pass
 
-    def make_test_data_from_array(self, images, labels, batch_size):
+    def make_test_data_from_array(self, images: np.array, labels: np.array) -> Any:
+        """
+        Method for creating image data generator form numpy arrays.
+        :parameter images: numpy array containing images.
+        :parameter labels: numpy array containing labels.
+        :returns image data generator.
+        """
         images, labels = self._balance_class(images=images, labels=labels)
-        return tf.keras.preprocessing.image.ImageDataGenerator().flow(np.array(images), labels, batch_size=batch_size)
+        return tf.keras.preprocessing.image.ImageDataGenerator().flow(
+            np.array(images), labels, batch_size=self.batch_size
+        )
 
-    def make_test_data_from_directory(self, path, labels_path=None, target_size=(100, 100)):
-
+    def make_test_data_from_directory(
+            self, path: str, labels_path: str = None, target_size: Tuple[int, int] = (100, 100)
+    ):
+        """
+        Method for creating image data generator form image data in folders.
+        :parameter path: numpy array containing images.
+        :parameter labels_path: path to csv data file with labels annotations.
+        :parameter target_size: size to which all images will be resized.
+        :returns image data generator.
+        """
         if labels_path:
             image_names, labels, = self.get_data_from_csv(labels_path, path)
         else:
@@ -38,28 +61,32 @@ class CorrelationFilterDataset(ABC):
             self.num_of_images = len(image_names)
 
         image_names, labels = self._balance_class(images=image_names, labels=labels)
-        print(image_names[0], image_names[-1])
-        images = []
+
+        images = list()
         for path in enumerate(image_names):
             images.append(self._get_image(path[1], target_size=target_size))
 
         print('num_of_images set to {}!'.format(np.shape(images)[0]))
 
-        return tf.keras.preprocessing.image.ImageDataGenerator(samplewise_center=True,
-                                                               samplewise_std_normalization=True).flow(
-            np.array(images),
-            labels,
-            batch_size=self.batch_size
-        )
+        return tf.keras.preprocessing.image.ImageDataGenerator(
+            samplewise_center=True, samplewise_std_normalization=True
+        ).flow(np.array(images), labels, batch_size=self.batch_size)
 
     def _balance_class(self, images, labels, batch_round=False):
-        if not isinstance(images, list):
+        """
+        Method for balancing images by classes.
+        :parameter images: numpy array containing images.
+        :parameter labels: path to csv data file with labels annotations.
+        :parameter batch_round: parameter indicating whether to drop last batch if it is not full or not.
+        :returns image data generator.
+        """
+        if isinstance(images, list):
+            images = np.array(images)
+        else:
             if len(images.shape) == 3:
                 images = np.expand_dims(images, 3)
             elif images.shape[3] > 1:
                 images = np.mean(images, axis=3, keepdims=True)
-        else:
-            images = np.array(images)
 
         positive_images = images[labels == self.gt_label]
         positive_labels = labels[labels == self.gt_label]
@@ -98,7 +125,13 @@ class CorrelationFilterDataset(ABC):
         labels = labels.astype(int)
         return images, labels
 
-    def _get_image(self, path, target_size):
+    def _get_image(self, path: str, target_size: Tuple[int, int]) -> np.array:
+        """
+        Method for image loading.
+        :parameter path: path to current image.
+        :parameter target_size: size to which all images will be resized.
+        :returns numpy array containing image.
+        """
         image = tf.keras.preprocessing.image.load_img(path, color_mode='grayscale', target_size=(target_size[0],
                                                                                                  target_size[1]))
         image = tf.keras.preprocessing.image.img_to_array(image)
@@ -107,16 +140,27 @@ class CorrelationFilterDataset(ABC):
         return image / 255.
 
     @staticmethod
-    def standard_scaler(x):
-        if len(x.shape) > 3:
-            x = tf.squeeze(x, axis=-1)
+    def standard_scaler(x: np.array) -> tf.Tensor:
+        """
+        Method for image loading.
+        :parameter x: image array.
+        :returns scaled image.
+        """
+        x = tf.squeeze(x, axis=-1) if len(x.shape) > 3 else x
         # x = tf.math.log(x + 1.)
-        scaled_x = (x - tf.reduce_mean(x, axis=(-2, -1), keepdims=True)) / tf.math.reduce_std(x, axis=(-2, -1),
-                                                                                              keepdims=True)
+        scaled_x = (x - tf.reduce_mean(x, axis=(-2, -1), keepdims=True)) / tf.math.reduce_std(
+            x, axis=(-2, -1), keepdims=True
+        )
         return scaled_x
 
     @staticmethod
-    def get_data_from_csv(labels_path, path):
+    def get_data_from_csv(labels_path: str, path: str) -> Tuple[list, np.array]:
+        """
+        Method for getting images paths and labels from csv file.
+        :parameter labels_path: path to labels annotations path.
+        :parameter path: path to folder containing images.
+        :returns images paths and labels.
+        """
         df = pd.read_csv(labels_path)
         file_names = df.iloc[:, 0].tolist()
         labels = df.iloc[:, 1].to_numpy()
@@ -124,7 +168,12 @@ class CorrelationFilterDataset(ABC):
         return images_path, labels
 
     @staticmethod
-    def get_data_from_directory(path):
+    def get_data_from_directory(path: str) -> Tuple[list, np.array]:
+        """
+        Method for getting images paths and labels from csv file.
+        :parameter path: path to folder containing images.
+        :returns images paths and labels.
+        """
         labels = []
         images_path = []
         for label, directory in enumerate(list(map(lambda x: path + '/' + x, os.listdir(path)))):
@@ -135,8 +184,10 @@ class CorrelationFilterDataset(ABC):
 
 
 class CFDataset(CorrelationFilterDataset):
-
-    def prepare_data_from_array(self, train_images, train_labels, num_of_images_last=False):
+    """
+    Classic correlation filters dataset class.
+    """
+    def prepare_data_from_array(self, train_images: np.array, train_labels: list, num_of_images_last=False) -> np.array:
 
         if not 3 <= len(train_images.shape) <= 4:
             raise ValueError('Train data shape should be 3 or 4 dimensional! Got {}-dimensional data array!'.format(
@@ -146,8 +197,9 @@ class CFDataset(CorrelationFilterDataset):
             train_images = np.transpose(train_images)
 
         if self.gt_label not in train_labels:
-            raise ValueError('Incorrect gt_label {}! Classes available: {}'.format(self.gt_label,
-                                                                                   np.unique(train_labels)))
+            raise ValueError(
+                'Incorrect gt_label {}! Classes available: {}'.format(self.gt_label, np.unique(train_labels))
+            )
 
         train_images = self._get_one_class(images=train_images, labels=train_labels)
 
@@ -158,7 +210,9 @@ class CFDataset(CorrelationFilterDataset):
 
         return train_images
 
-    def prepare_data_from_directory(self, train_path, train_labels_path=None, target_size=(100, 100)):
+    def prepare_data_from_directory(
+            self, train_path: str, train_labels_path: str = None, target_size: Tuple[int, int] = (100, 100)
+    ) -> np.array:
         if train_labels_path:
             image_names, labels, = self.get_data_from_csv(train_labels_path, train_path)
         else:
@@ -173,8 +227,7 @@ class CFDataset(CorrelationFilterDataset):
         for path in enumerate(image_names):
             images.append(self._get_image(path[1], target_size=target_size))
 
-        if len(np.shape(images)) > 3:
-            images = np.squeeze(np.array(images), axis=-1)
+        images = np.squeeze(np.array(images), axis=-1) if len(np.shape(images)) > 3 else images
 
         images = self.standard_scaler(np.array(images)).numpy()
         return images
@@ -201,18 +254,22 @@ class CFDataset(CorrelationFilterDataset):
 
 class MMCFDataset(CorrelationFilterDataset):
 
-    def __init__(self, lambda_, gt_label=0, num_of_images=None, inverse=False, batch_size=32):
-        super(MMCFDataset, self).__init__(gt_label, num_of_images, inverse, batch_size)
+    def __init__(self, lambda_, pos_class_label=0, num_of_images=None, inverse=False, batch_size=32):
+        super(MMCFDataset, self).__init__(
+            pos_class_label=pos_class_label, num_of_images=num_of_images, inverse=inverse, batch_size=batch_size
+        )
         self.lambda_ = lambda_
 
     def prepare_data_from_array(self, train_images, train_labels, num_of_images_last=False):
 
         if not 3 <= len(train_images.shape) <= 4:
-            raise ValueError('Train data shape should be 3 or 4 dimensional! Got {}-dimensional data array!'.format(
+            raise ValueError(
+                'Train data shape should be 3 or 4 dimensional! Got {}-dimensional data array!'.format(
                                                                                                  len(train_images.shape)
-            ))
+                )
+            )
         if num_of_images_last:
-            train_images = np.transpose(train_images)
+            train_images = np.moveaxis(train_images, -1, 0)
 
         if not self.num_of_images or self.num_of_images > train_images.shape[0]:
             self.num_of_images = train_images.shape[0]

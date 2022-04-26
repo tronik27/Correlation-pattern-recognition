@@ -17,7 +17,19 @@ import os
 
 
 class Correlator:
-    def __init__(self, images, cf, filter_plane='spatial', num_images_last=False, use_wf=False):
+    def __init__(
+            self, images: np.array, cf: np.array, filter_plane: str = 'spatial', num_images_last=False, use_wf=False
+    ) -> None:
+        """
+        Correlator class.
+        :param images: numpy array containing images.
+        :param cf: numpy array containing correlation filter matrix.
+        :param filter_plane: domain in which correlation filter is obtained. Must be one of: spatial, fourier.
+        :param num_images_last: parameter indicating whether the first two sizes correspond to the size of the image or
+        not.
+        :param use_wf: parameter indicating whether to apply window to image before calculating cross-correlation or
+        not. Used when calculating the correlation on the modulator.
+        """
         if len(cf.shape) == 2:
             self.cf = tf.expand_dims(tf.cast(cf, dtype='complex64'), axis=0)
         elif len(cf.shape) == 3:
@@ -44,8 +56,10 @@ class Correlator:
         self.use_wf = use_wf
         self.scenes = tf.zeros(1)
 
-    def correlation(self):
-
+    def correlation(self) -> np.array:
+        """
+        Method for calculating cross-correlation in spatial domain with convolutional layer.
+        """
         corr_filter = tf.expand_dims(self.cf, axis=3)
 
         image = np.transpose(np.expand_dims(self.images - np.mean(self.images), axis=(2, 3)), (3, 0, 1, 2))
@@ -55,13 +69,20 @@ class Correlator:
 
         return self.scenes
 
-    def fourier_correlation(self):
-        cf, img = self._prepare(use_wf=self.use_wf)
+    def fourier_correlation(self) -> np.array:
+        """
+        Method for calculating cross-correlation in fourier domain.
+        """
+        cf, img = self._prepare()
         corr = tf.abs(self.tf_ifft2(self.tf_fft2(img) * tf.math.conj(self.tf_fft2(cf)))).numpy()
         self.scenes = self._get_from_center(scene=corr, shape=self.images.shape)
         return self.scenes
 
-    def van_der_lugt(self, sample_level=8):
+    def van_der_lugt(self, sample_level: int = 8) -> np.array:
+        """
+        Method for calculating cross-correlation in 4f correlator.
+        :parameter sample_level: image quantization degree.
+        """
         cf, img = self._put_on_modulator(correlator_type='4f', sample_level=sample_level)
         plt.imshow(np.abs(img.numpy()[0, :, :]), cmap='gray')
         plt.show()
@@ -69,19 +90,28 @@ class Correlator:
         self._get_peak(size_param=0.5, correlator_type='4f')
         return self.scenes
 
-    def joint_transform(self, size_param=0.1, sample_level=8):
+    def joint_transform(self, size_param: float = 0.1, sample_level: int = 8) -> np.array:
+        """
+        Method for calculating cross-correlation in joint transform correlator.
+        :parameter size_param: part of cross correlation scene.
+        :parameter sample_level: image quantization degree.
+        """
         img = self._put_on_modulator(correlator_type='2f', sample_level=sample_level)
         self.scenes = tf.math.abs(self.tf_ifft2(tf.cast(tf.abs(self.tf_fft2(img)), dtype='complex64'))).numpy()
 
         self._get_peak(size_param=size_param, correlator_type='2f')
         return self.scenes
 
-    def _prepare(self, use_wf=False):
-        if use_wf:
-            img = self._window_function(self.images)
-            cf = self.cf
+    def _prepare(self) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Method for image and correlation filer arrays preprocessing.
+        :return processed image and correlation filter arrays.
+        """
+        if self.use_wf:
+            img = self._window_function(self.images.copy())
+            cf = self.cf.copy()
         else:
-            img = self.zero_mean(self.images)
+            img = self.zero_mean(self.images.copy())
             paddings = tf.constant([[0, 0], [self.cf.shape[-2] // 2, self.cf.shape[-2] // 2],
                                     [self.cf.shape[-1] // 2, self.cf.shape[-1] // 2]])
             img = tf.pad(img, paddings, "CONSTANT")
@@ -92,7 +122,12 @@ class Correlator:
             cf = tf.pad(cf, paddings, "CONSTANT")
         return cf, img
 
-    def _put_on_modulator(self, correlator_type, sample_level):
+    def _put_on_modulator(self, correlator_type: str, sample_level: int) -> tf.Tensor or Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Method for placing image and correlation filter data on modulator.
+        :parameter correlator_type: type of used correlator.
+        :parameter sample_level: image quantization degree.
+        """
         cf, images = self._prepare_data_for_modulator(correlator_type=correlator_type, sample_level=sample_level)
         if correlator_type == '2f':
             paddings = tf.constant([[0, 0], [10, images.shape[1] * 3 - 10],
@@ -113,23 +148,42 @@ class Correlator:
             cf = tf.pad(cf, paddings, "CONSTANT", constant_values=0)
             return cf, img
 
-    def _get_peak(self, size_param, correlator_type):
+    def _get_peak(self, size_param: float, correlator_type: str) -> None:
         y, x = self.scenes.shape[1] // 2, self.scenes.shape[2] // 2
         y1, x1 = self.images.shape[1:]
-        print(self.scenes.shape)
         if correlator_type == '2f':
             self.scenes[:, :, x - int(size_param * x1): x + int(size_param * x1)] = 0
             self.scenes[:, y - int(size_param * y1): y + int(size_param * y1), :] = 0
         else:
             self.scenes[:, y - int(size_param * y1): y + int(size_param * y1),
                         x - int(size_param * x1): x + int(size_param * x1)] = 0
-        # self.scenes = self.scenes[:, 400: 800, 400: 800]
-        # first_maximum_coordinates = np.unravel_index(np.argmax(self.scenes[0, :, :]), self.scenes.shape[1:])
-        # y, x = first_maximum_coordinates[0], first_maximum_coordinates[1]
-        # print('1', y, x)
-        # self.scenes = self.scenes[:, y - y1 // 2: y + y1 // 2, x - x1 // 2: x + x1 // 2]
 
-    def _prepare_data_for_modulator(self, correlator_type, sample_level=8):
+    def _find_peak(self, size_param: float, correlator_type: str) -> None:
+        """
+        Method for finding correlation peak on cross-correlation scene.
+        :parameter correlator_type: type of used correlator.
+        :parameter size_param: part of cross correlation scene.
+        """
+        general_maximum_coordinates = self.scenes.shape[1] // 2, self.scenes.shape[2] // 2
+        y, x = general_maximum_coordinates[0], general_maximum_coordinates[1]
+        y1, x1 = self.images.shape[1:]
+        if correlator_type == '2f':
+            self.scenes[:, :, x - int(size_param * x1): x + int(size_param * x1)] = 0
+            self.scenes[:, y - int(size_param * y1): y + int(size_param * y1), :] = 0
+        else:
+            self.scenes[:, y - int(size_param * y1): y + int(size_param * y1),
+                        x - int(size_param * x1): x + int(size_param * x1)] = 0
+
+        correlation_peak_coordinates = np.unravel_index(np.argmax(self.scenes[0, :, :]), self.scenes.shape[1:])
+        y, x = correlation_peak_coordinates[0], correlation_peak_coordinates[1]
+        self.scenes = self.scenes[:, y - y1 // 2: y + y1 // 2, x - x1 // 2: x + x1 // 2]
+
+    def _prepare_data_for_modulator(self, correlator_type: str, sample_level: int = 8) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Method for preparing image and correlation filter data for placing it on modulator.
+        :parameter correlator_type: type of used correlator.
+        :parameter sample_level: image quantization degree.
+        """
         if correlator_type == '4f':
             cf = self._amplitude_hologram(sample_level=sample_level)
             img = self.quantization(sample_level=sample_level, x=self.images)
@@ -138,16 +192,23 @@ class Correlator:
             cf = self.quantization(sample_level=sample_level, x=self.cf)
         return cf, img
 
-    def _amplitude_hologram(self, sample_level=8):
-        paddings = tf.constant([[0, 0], [0, self.cf.shape[1]],
-                                [0, self.cf.shape[2]]])
+    def _amplitude_hologram(self, sample_level=8) -> tf.Tensor:
+        """
+        Method for creating amplitude hologram of correlation filter.
+        :parameter sample_level: image quantization degree.
+        """
+        paddings = tf.constant([[0, 0], [0, self.cf.shape[1]], [0, self.cf.shape[2]]])
         H = tf.pad(self.zero_mean(self.cf), paddings, "CONSTANT")
         H = self.tf_fft2(H)
         holo = tf.math.real(H) - tf.reduce_min(tf.math.real(H), axis=(-2, -1), keepdims=True)
         holo = self.quantization(sample_level=sample_level, x=holo)
         return holo
 
-    def plot(self):
+    def plot(self) -> None:
+        """
+        Method for showing example of image, correlation filter and cross-correlation peak corresponding to their
+        cross-correlation output.
+        """
         if self.scenes.any():
             plt.figure(figsize=(8, 3))
             ax1 = plt.subplot(1, 3, 1, adjustable='box')
@@ -170,46 +231,134 @@ class Correlator:
             print('Nothing to show!')
 
     @staticmethod
-    def zero_mean(x):
+    def zero_mean(x:  tf.Tensor) -> tf.Tensor:
+        """
+        Method for zeroing the mean value of an image.
+        :param x: numpy array containing image.
+        :return: processed image array.
+        """
         return x - tf.reduce_mean(x, axis=(-2, -1), keepdims=True)
 
     @staticmethod
-    def quantization(sample_level, x):
+    def quantization(sample_level: int, x: np.array) -> tf.Tensor:
+        """
+        Method for image quantization.
+        :param sample_level: image quantization degree.
+        :param x: numpy array containing image.
+        :return: quantized image array.
+        """
         x = tf.abs(x)
         quant = tf.cast(x / tf.reduce_max(x, axis=(-2, -1), keepdims=True), dtype='int8') * (2 ** sample_level - 1)
         return tf.cast(quant, dtype='complex64')
 
     @staticmethod
-    def _get_from_center(scene, shape):
+    def _get_from_center(scene: np.array, shape: Tuple[int, int]) -> np.array:
+        """
+        Method for cross correlation scene processing.
+        :param scene: cross-correlation output array.
+        :param shape: tuple containing original image shape.
+        :return: part of the cross-correlation scene corresponding to the original image.
+        """
         if shape[0] > scene.shape[0] or shape[1] > scene.shape[1]:
             raise ValueError("The image should be smaller than the scene on which it is placed!")
         return scene[:, (scene.shape[1] - shape[1]) // 2:(scene.shape[1] + shape[1]) // 2,
                      (scene.shape[2] - shape[2]) // 2:(scene.shape[2] + shape[2]) // 2]
 
     @staticmethod
-    def tf_fft2(image):
+    def tf_fft2(image: tf.Tensor) -> tf.Tensor:
         """
-        Direct 2D Fourier transform for the image.
+        Direct 2D Fourier transforms for the image.
         :param image: image array.
         :return: Fourier transform of the image.
         """
         return tf.signal.fftshift(tf.signal.fft2d(tf.signal.ifftshift(image)))
 
     @staticmethod
-    def tf_ifft2(image):
+    def tf_ifft2(image: tf.Tensor) -> tf.Tensor:
         """
-        Inverse 2D Fourier Transform for the image.
+        Inverse 2D Fourier transforms for the image.
         :param image: image array.
         :return: Fourier transform of the image.
         """
         return tf.signal.ifftshift(tf.signal.ifft2d(tf.signal.fftshift(image)))
 
     @staticmethod
-    def _window_function(image):
+    def _window_function(image: np.array) -> np.array:
+        """
+        Method for applying window to image.
+        :param image: image array.
+        :return: numpy array containing windowed image.
+        """
         x = np.arange(0, image.shape[-1], 1, float)
         y = x[:, np.newaxis]
         window = np.sin(np.pi * x / image.shape[-2]) * np.sin(np.pi * y / image.shape[-1])
         return image * window
+
+
+class PlotCrossCorrelation:
+
+    def __init__(self, corr_scenes: np.array, labels=np.zeros(3)) -> None:
+        """
+        Cross-correlation response plotting class.
+        :parameter corr_scenes: numpy array containing cross-correlation scenes.
+        :parameter labels: labels corresponding to cross-correlation scenes
+        """
+        if len(corr_scenes.shape) == 2:
+            self.corr_scenes = np.expand_dims(corr_scenes, axis=0)
+        elif len(corr_scenes.shape) == 4:
+            self.corr_scenes = np.mean(corr_scenes, axis=-1)
+        elif len(corr_scenes.shape) == 3:
+            self.corr_scenes = corr_scenes
+        else:
+            self.corr_scenes = corr_scenes
+        self.labels = labels
+
+    def plot_3d(self) -> None:
+        """
+        Method for cross-correlation peaks plotting in 3D.
+        """
+        fig = plt.figure(figsize=(self.corr_scenes.shape[0]*5, 4))
+        fig.suptitle('Cross-correlation', fontsize=16)
+        for i in range(self.corr_scenes.shape[0]):
+            axes = fig.add_subplot(1, self.corr_scenes.shape[0], i+1, projection='3d')
+            x = np.arange(0, self.corr_scenes[i].shape[0], 1)
+            y = np.arange(0, self.corr_scenes[i].shape[1], 1)
+            x, y = np.meshgrid(x, y)
+            surf = axes.plot_surface(x, y, self.corr_scenes[i], rstride=ceil(self.corr_scenes[i].shape[0] / 100),
+                                     cstride=ceil(self.corr_scenes[i].shape[1] / 100), cmap=cm.jet)
+            fig.colorbar(surf, shrink=0.5, aspect=10)
+            if self.labels.any():
+                if self.labels[i] == 1:
+                    axes.set_title('Positive Correlation', size=15)
+                else:
+                    axes.set_title('Negative Correlation', size=15)
+        plt.show()
+
+    def plot(self) -> None:
+        """
+        Method for cross-correlation peaks plotting in 2D.
+        """
+        if self.corr_scenes.shape[0] > 4:
+            if self.corr_scenes.shape[0] % 4:
+                self.corr_scenes = self.corr_scenes[:-3, :, :]
+            number_of_cols = self.corr_scenes.shape[0] // 4
+            number_of_rows = 4
+        else:
+            number_of_rows = 1
+            number_of_cols = self.corr_scenes.shape[0]
+
+        fig, axes = plt.subplots(nrows=number_of_rows, ncols=number_of_cols, figsize=(4 * number_of_rows,
+                                                                                      4 * number_of_cols))
+        axes = np.array(axes)
+        for i, axe in enumerate(axes.flat):
+            axe.imshow(self.corr_scenes[i, :, :], cmap=cm.jet)
+            axe.axis('off')
+            if self.labels.any():
+                if self.labels[i] == 1:
+                    axe.set_title('Positive Correlation', size=10)
+                else:
+                    axe.set_title('Negative Correlation', size=10)
+        plt.show()
 
 
 class WorkingWithJointTransformCorrelator:
@@ -461,7 +610,7 @@ class WorkingWithJointTransformCorrelator:
     @staticmethod
     def _fft2(image: np.ndarray, axes: Tuple[int, int] = (-2, -1)) -> np.ndarray:
         """
-        Direct 2D Fourier transform for the image.
+        Method for applying direct 2D Fourier transforms for the image.
         :param image: image array.
         :param axes: axes over which to compute the FFT.
         :return: Fourier transform of the image.
@@ -471,7 +620,7 @@ class WorkingWithJointTransformCorrelator:
     @staticmethod
     def ifft2(image: np.ndarray, axes: Tuple[int, int] = (-2, -1)) -> np.ndarray:
         """
-        Inverse 2D Fourier Transform for Image.
+        Method for applying inverse 2D Fourier transforms for image.
         :param image: image array.
         :param axes: axes over which to compute the FFT.
         :return: Fourier transform of the image.
@@ -479,88 +628,45 @@ class WorkingWithJointTransformCorrelator:
         return np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(image, axes=axes), axes=axes), axes=axes)
 
     @staticmethod
-    def resize_image(image, max_height, max_wide):
+    def resize_image(image: np.array, max_height: int, max_wide: int) -> np.array:
+        """
+        Method for image resizing before placing on modulator.
+        :param image: image array.
+        :param max_height:  maximum image height (in pixels).
+        :param max_wide: maximum image width (in pixels).
+        :return: resized image.
+        """
         h, w = image.shape
         if (h > max_height) and (w > max_wide):
             if w > h:
-                resized_image = cv.resize(image, (max_wide, int(h * float(max_wide) / w)),
-                                          interpolation=cv.INTER_AREA)
+                resized_image = cv.resize(image, (max_wide, int(h * float(max_wide) / w)), interpolation=cv.INTER_AREA)
             else:
-                resized_image = cv.resize(image, (int(w * float(max_height) / h), max_height),
-                                          interpolation=cv.INTER_AREA)
+                resized_image = cv.resize(
+                    image, (int(w * float(max_height) / h), max_height), interpolation=cv.INTER_AREA
+                )
         elif h > max_height:
-            resized_image = cv.resize(image, (int(w * float(max_height) / h), max_height),
-                                      interpolation=cv.INTER_AREA)
+            resized_image = cv.resize(image, (int(w * float(max_height) / h), max_height), interpolation=cv.INTER_AREA)
         else:
             resized_image = cv.resize(image, (max_wide, int(h * float(max_wide) / w)), interpolation=cv.INTER_AREA)
         return resized_image
 
 
-class PlotCrossCorrelation:
-
-    def __init__(self, corr_scenes, labels=np.zeros(3)):
-        if len(corr_scenes.shape) == 2:
-            self.corr_scenes = np.expand_dims(corr_scenes, axis=0)
-        elif len(corr_scenes.shape) == 4:
-            self.corr_scenes = np.mean(corr_scenes, axis=-1)
-        elif len(corr_scenes.shape) == 3:
-            self.corr_scenes = corr_scenes
-        else:
-            self.corr_scenes = corr_scenes
-        self.labels = labels
-
-    def plot_3D(self):
-        fig = plt.figure(figsize=(self.corr_scenes.shape[0]*5, 4))
-        fig.suptitle('Cross-correlation', fontsize=16)
-        for i in range(self.corr_scenes.shape[0]):
-            axes = fig.add_subplot(1, self.corr_scenes.shape[0], i+1, projection='3d')
-            x = np.arange(0, self.corr_scenes[i].shape[0], 1)
-            y = np.arange(0, self.corr_scenes[i].shape[1], 1)
-            x, y = np.meshgrid(x, y)
-            surf = axes.plot_surface(x, y, self.corr_scenes[i], rstride=ceil(self.corr_scenes[i].shape[0] / 100),
-                                     cstride=ceil(self.corr_scenes[i].shape[1] / 100), cmap=cm.jet)
-            fig.colorbar(surf, shrink=0.5, aspect=10)
-            if self.labels.any():
-                if self.labels[i] == 1:
-                    axes.set_title('Positive Correlation', size=15)
-                else:
-                    axes.set_title('Negative Correlation', size=15)
-        plt.show()
-
-    def plot(self):
-        if self.corr_scenes.shape[0] > 4:
-            if self.corr_scenes.shape[0] % 4:
-                self.corr_scenes = self.corr_scenes[:-3, :, :]
-            number_of_cols = self.corr_scenes.shape[0] // 4
-            number_of_rows = 4
-        elif self.corr_scenes.shape[0] <= 4:
-            number_of_rows = 1
-            number_of_cols = self.corr_scenes.shape[0]
-
-        fig, axes = plt.subplots(nrows=number_of_rows, ncols=number_of_cols, figsize=(4 * number_of_rows,
-                                                                                      4 * number_of_cols))
-        axes = np.array(axes)
-        for i, axe in enumerate(axes.flat):
-            axe.imshow(self.corr_scenes[i, :, :], cmap=cm.jet)
-            axe.axis('off')
-            if self.labels.any():
-                if self.labels[i] == 1:
-                    axe.set_title('Positive Correlation', size=10)
-                else:
-                    axe.set_title('Negative Correlation', size=10)
-        plt.show()
-
-
-def HogBinarization(image):
-    _, image = hog(image, orientations=9, pixels_per_cell=(3, 3),
-                   cells_per_block=(1, 1), visualize=True, multichannel=False)
+def hog_binarization(image: np.array) -> np.array:
+    """
+    Method for image binarization with HOG algorithm.
+    :param image: image array.
+    :return: binary image.
+    """
+    _, image = hog(
+        image, orientations=9, pixels_per_cell=(3, 3), cells_per_block=(1, 1), visualize=True, multichannel=False
+    )
     thresh = threshold_yen(image)
-    binary = image > thresh
+    binary = image[image > thresh]
     bin_img = 255 * binary.astype(int) + 255
     return bin_img
 
 
-def CorrScenePrepare(scene):
+def corr_scene_prepare(scene: np.array) -> np.array:
     quant_scene = (scene - np.quantile(scene, q=0.57))
     quant_scene[quant_scene < 0.5 * np.max(quant_scene)] = 0
     scene = np.hstack((scene, quant_scene))

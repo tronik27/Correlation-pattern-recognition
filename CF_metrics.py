@@ -6,7 +6,7 @@ from onnxruntime import InferenceSession
 
 
 class OnnxModelLoader:
-    def __init__(self, onnx_path: str):
+    def __init__(self, onnx_path: str) -> None:
         """
         Class for loading ONNX models to inference on CPU.
         :param onnx_path: path to ONNX model file (*.onnx file).
@@ -20,7 +20,7 @@ class OnnxModelLoader:
 
     def inference(self, inputs: np.ndarray) -> np.ndarray:
         """
-        Run inference.
+        Method for model inference run.
         :param inputs: input numpy array.
         :return: output numpy array.
         """
@@ -67,7 +67,7 @@ class CFMetric(tf.keras.metrics.Metric):
     def result(self):
         return self.metric_value
 
-    def pcnn(self, scenes):
+    def pcnn(self, scenes: np):
         class_labels = []
         for i in range(scenes.shape[0]):
             scene = tf.expand_dims(scenes[i, :, :, :] / tf.reduce_max(scenes[i, :, :, :], axis=[0, 1], keepdims=True),

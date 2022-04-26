@@ -7,13 +7,29 @@ from typing import Tuple
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import seaborn as sns
+from tqdm import tqdm
 from Correlation.Correlation_utils import Correlator, PlotCrossCorrelation, WorkingWithJointTransformCorrelator
 from CF_ResNet import NNCFModel
 
 
 class CorrelationFilter(ABC):
-    def __init__(self, images, labels, gt_label, metric_names=None, inverse=False, filter_plane='spatial',
-                 peak_classifier='pcnn', num_of_images=1000, batch_size=32):
+    def __init__(
+            self, images, labels, gt_label, metric_names=None, inverse=False, filter_plane='spatial',
+            peak_classifier='pcnn', num_of_images=1000, batch_size=32
+    ):
+        """
+        Correlation filters base class.
+        :param images: axis responsible for the number of images in the set.
+        :param labels: desired filter size.
+        :param gt_label: S matrix coefficient.
+        :param metric_names: D matrix coefficient.
+        :param inverse: D matrix coefficient.
+        :param filter_plane: D matrix coefficient.
+        :param peak_classifier: D matrix coefficient.
+        :param num_of_images: D matrix coefficient.
+        :param batch_size: D matrix coefficient.
+        :return: obtained OT MACH correlation filter.
+        """
         self.images = images
         self.labels = labels
         self.num_of_images = num_of_images
@@ -38,58 +54,43 @@ class CorrelationFilter(ABC):
             self.cf = np.load(path_to_filter)
 
         if isinstance(self.images, str):
-            test_gen = CFDataset(gt_label=self.gt_label,
-                                 num_of_images=self.num_of_images,
-                                 inverse=self.inverse,
-                                 batch_size=self.batch_size).make_test_data_from_directory(
-                path=self.images,
-                labels_path=self.labels,
-                target_size=target_size
+            test_gen = CFDataset(
+                pos_class_label=self.gt_label, num_of_images=self.num_of_images,
+                inverse=self.inverse, batch_size=self.batch_size
+            ).make_test_data_from_directory(
+                path=self.images, labels_path=self.labels, target_size=target_size
             )
         else:
-            test_gen = CFDataset(gt_label=self.gt_label,
-                                 num_of_images=self.num_of_images).make_test_data_from_array(
-                images=self.images,
-                batch_size=self.batch_size,
-                labels=self.labels
-            )
+            test_gen = CFDataset(
+                pos_class_label=self.gt_label, num_of_images=self.num_of_images, batch_size=self.batch_size
+            ).make_test_data_from_array(images=self.images, labels=self.labels)
 
         batches = 0
-        for img_batch, label_batch in test_gen:
+        # correlation_output = list()
+        for img_batch, label_batch in tqdm(test_gen):
             batches += 1
             correlations = self.correlation(img_batch[:, :, :, 0], corr_type=corr_type, use_wf=use_wf)
             if batches >= self.num_of_images / self.batch_size:
-                self.calculate_metric_values(labels=label_batch,
-                                             preds=correlations,
-                                             path_to_model=path_to_model,
-                                             get=get,
-                                             finish=True)
+                self.calculate_metric_values(labels=label_batch, predictions=correlations, path_to_model=path_to_model,
+                                             finish=True, get=get)
+                if plot_correlations_in_3d:
+                    self.plot_3d_correlations(correlations, label_batch)
+                if plot_correlations_in_2d:
+                    self.plot_2d_correlations(correlations, label_batch)
                 break
             else:
-                self.calculate_metric_values(labels=label_batch,
-                                             preds=correlations,
-                                             path_to_model=path_to_model,
-                                             get=get)
-        correlations = correlations[:, correlations.shape[1] // 2 - 16: correlations.shape[1] // 2 + 16,
-                                    correlations.shape[2] // 2 - 16: correlations.shape[2] // 2 + 16]
-        # print('c', correlations.shape)
-        # print('pc', correlations[label_batch == 1].shape)
-        # print('nc', correlations[label_batch != 1].shape)
-        # print('gt', self.gt_label)
-        # print('labels', label_batch)
-        # np.save('CC/positive/yale{}_{}'.format(self.name, self.gt_label), correlations[label_batch == 1])
-        # np.save('CC/negative/yale{}_{}'.format(self.name, self.gt_label), correlations[label_batch != 1])
-        if plot_correlations_in_3d:
-            self.plot_3d_correlations(correlations, label_batch)
-        if plot_correlations_in_2d:
-            self.plot_2d_correlations(correlations, label_batch)
-        if plot_conf_matrix:
-            self.plot_confusion_matrix(CFMetric(path_to_model=path_to_model, peak_classifier='pcnn'),
-                                       label_batch, np.array(correlations))
+                self.calculate_metric_values(
+                    labels=label_batch, predictions=correlations, path_to_model=path_to_model, get=get
+                )
+        # if plot_conf_matrix:
+        #     self.plot_confusion_matrix(
+        #         CFMetric(path_to_model=path_to_model, peak_classifier='pcnn'), label_batch, np.array(correlations)
+        #     )
 
-    def correlation(self, images, corr_type, use_wf, num_images_last=False):
-        c = Correlator(images, self.cf, filter_plane=self.filter_plane, num_images_last=num_images_last,
-                       use_wf=use_wf)
+    def correlation(self, images: np.array, corr_type: str, use_wf: bool, num_images_last: bool = False) -> np.array:
+        c = Correlator(
+            images, self.cf, filter_plane=self.filter_plane, num_images_last=num_images_last, use_wf=use_wf
+        )
         scenes = getattr(c, corr_type)()
         return scenes
 
@@ -100,12 +101,12 @@ class CorrelationFilter(ABC):
         c.cf_hologram_recovery(holo_name=self.name, sample_level=sample_level, filter_plane=self.filter_plane,
                                multi=multi)
 
-    def calculate_metric_values(self, labels, preds, path_to_model, finish=False, get=False):
+    def calculate_metric_values(self, labels, predictions, path_to_model, finish=False, get=False):
         metrics = self.get_metrics(path_to_model=path_to_model)
         if not get:
             print(self.name + ':')
         for metric in metrics:
-            metric.update_state(labels, preds)
+            metric.update_state(labels, predictions)
             if finish and get:
                 self.m_values.append(metric.result().numpy())
             elif finish and not get:
@@ -147,7 +148,7 @@ class CorrelationFilter(ABC):
                              np.random.choice(np.where(labels == 1)[0], n)))
         selected_correlations = [correlations[i] for i in indexes]
         selected_labels = [labels[i] for i in indexes]
-        PlotCrossCorrelation(corr_scenes=np.array(selected_correlations), labels=np.array(selected_labels)).plot_3D()
+        PlotCrossCorrelation(corr_scenes=np.array(selected_correlations), labels=np.array(selected_labels)).plot_3d()
 
     @staticmethod
     def plot_2d_correlations(correlations, labels):
@@ -184,7 +185,7 @@ class CorrelationFilter(ABC):
 class NNCF(CorrelationFilter):
     def __init__(self, images, labels=None, validation_images=None, validation_labels=None,  num_of_images=12000,
                  gt_label=0, metric_names=['accuracy'], peak_classifier='pcnn', inverse=False):
-        super(MMCF, self).__init__()
+        super(NNCF, self).__init__()
         self.images = images
         self.labels = labels
         self.validation_images = validation_images
@@ -258,9 +259,14 @@ class MMCF(CorrelationFilter):
         self.c = c
         self.name = "MMCF"
 
-    def synthesis(self, target_size=(100, 100), num_of_images_last=False) -> np.ndarray:
-
-        datagen = MMCFDataset(gt_label=self.gt_label, num_of_images=self.num_of_images,
+    def synthesis(self, target_size: Tuple[int, int] = (100, 100), num_of_images_last: bool = False) -> np.ndarray:
+        """
+        Method for MMCF correlation filter synthesis.
+        :param num_of_images_last: axis responsible for the number of images in the set.
+        :param target_size: desired filter size.
+        :return: obtained OT MACH correlation filter.
+        """
+        datagen = MMCFDataset(pos_class_label=self.gt_label, num_of_images=self.num_of_images,
                               inverse=self.inverse, lambda_=self.lambda_)
         if isinstance(self.images, str):
             X_train_MMCF, train_labels, shape, S = datagen.prepare_data_from_directory(
@@ -293,26 +299,21 @@ class OTSDF(CorrelationFilter):
         self.lambda_ = lambda_
         self.name = 'OTSDF'
 
-    def synthesis(self, target_size=(100, 100), num_of_images_last=False) -> np.ndarray:
+    def synthesis(self, target_size: Tuple[int, int] = (100, 100), num_of_images_last: bool = False) -> np.ndarray:
         """
-        OTSDF correlation filter.
+        Method for OTSDF correlation filter synthesis.
         :param num_of_images_last: axis responsible for the number of images in the set.
         :param target_size: desired filter size.
         :return: obtained OT MACH correlation filter.
         """
-        datagen = CFDataset(gt_label=self.gt_label, num_of_images=self.num_of_images,
-                            inverse=self.inverse)
+        datagen = CFDataset(pos_class_label=self.gt_label, num_of_images=self.num_of_images, inverse=self.inverse)
         if isinstance(self.images, str):
             train_images = datagen.prepare_data_from_directory(
-                train_path=self.images,
-                train_labels_path=self.labels,
-                target_size=target_size
+                train_path=self.images, train_labels_path=self.labels, target_size=target_size
             )
         else:
             train_images = datagen.prepare_data_from_array(
-                train_images=self.images,
-                train_labels=self.labels,
-                num_of_images_last=num_of_images_last,
+                train_images=self.images, train_labels=self.labels, num_of_images_last=num_of_images_last,
             )
 
         img_number, height, width = train_images.shape
@@ -334,9 +335,9 @@ class MVSDF(CorrelationFilter):
                                     num_of_images, batch_size)
         self.name = 'MVSDF'
 
-    def synthesis(self, target_size=(100, 100), num_of_images_last=False) -> np.ndarray:
+    def synthesis(self, target_size: Tuple[int, int] = (100, 100), num_of_images_last: bool = False) -> np.ndarray:
         """
-        MVSDF correlation filter.
+        Method for MVSDF correlation filter synthesis.
         :param num_of_images_last: axis responsible for the number of images in the set.
         :param target_size: desired filter size.
         :return: obtained OT MACH correlation filter.
@@ -352,15 +353,17 @@ class MVSDF(CorrelationFilter):
 
 
 class MACE(CorrelationFilter):
-    def __init__(self, images, gt_label, labels,  metric_names=None,  inverse=False, filter_plane='freq',
-                 peak_classifier='pcnn', num_of_images=1000, batch_size=32):
-        super(MACE, self).__init__(images, labels, gt_label, metric_names, inverse, filter_plane, peak_classifier,
-                                   num_of_images, batch_size)
+    def __init__(self, images, gt_label, labels,  inverse=False, filter_plane='freq',
+                 peak_classifier='pcnn', num_of_images=1000):
+        super(MACE, self).__init__(
+            images=images, labels=labels, gt_label=gt_label, inverse=inverse,
+            filter_plane=filter_plane, peak_classifier=peak_classifier, num_of_images=num_of_images
+        )
         self.name = 'MACE'
 
-    def synthesis(self, target_size=(100, 100), num_of_images_last=False) -> np.ndarray:
+    def synthesis(self, target_size: Tuple[int, int] = (100, 100), num_of_images_last: bool = False) -> np.ndarray:
         """
-        MACE correlation filter.
+        Method for MACE correlation filter synthesis.
         :param num_of_images_last: axis responsible for the number of images in the set.
         :param target_size: desired filter size.
         :return: obtained OT MACH correlation filter.
@@ -390,19 +393,14 @@ class UOTSDF(CorrelationFilter):
         :param target_size: desired filter size.
         :return: obtained OT MACH correlation filter.
         """
-        datagen = CFDataset(gt_label=self.gt_label, num_of_images=self.num_of_images,
-                            inverse=self.inverse)
+        datagen = CFDataset(pos_class_label=self.gt_label, num_of_images=self.num_of_images, inverse=self.inverse)
         if isinstance(self.images, str):
             train_images = datagen.prepare_data_from_directory(
-                train_path=self.images,
-                train_labels_path=self.labels,
-                target_size=target_size
+                train_path=self.images, train_labels_path=self.labels, target_size=target_size
             )
         else:
             train_images = datagen.prepare_data_from_array(
-                train_images=self.images,
-                train_labels=self.labels,
-                num_of_images_last=num_of_images_last,
+                train_images=self.images, train_labels=self.labels, num_of_images_last=num_of_images_last,
             )
 
         img_number, height, width = train_images.shape
@@ -442,9 +440,10 @@ class MACH(CorrelationFilter):
 
 class UMACE(CorrelationFilter):
     def __init__(self, images, gt_label, labels,  metric_names=None,  inverse=False, filter_plane='freq',
-                 peak_classifier='pcnn', num_of_images=1000, batch_size=32):
-        super(UMACE, self).__init__(images, labels, gt_label, metric_names, inverse, filter_plane, peak_classifier,
-                                    num_of_images, batch_size)
+                 peak_classifier='pcnn', num_of_images=1000):
+        super(UMACE, self).__init__(
+            images, labels, gt_label, metric_names, inverse, filter_plane, peak_classifier, num_of_images
+        )
         self.name = 'UMACE'
 
     def synthesis(self, target_size=(100, 100), num_of_images_last=False) -> np.ndarray:
@@ -466,14 +465,15 @@ class UMACE(CorrelationFilter):
 
 class ASEF(CorrelationFilter):
     def __init__(self, images, labels, gt_label, metric_names=None,  inverse=False, filter_plane='freq',
-                 peak_classifier='pcnn', num_of_images=1000, batch_size=32, fwhm: int = 1):
+                 peak_classifier='pcnn', num_of_images=1000, fwhm: int = 1):
         super(ASEF, self).__init__(images, labels, gt_label, metric_names, inverse, filter_plane, peak_classifier,
-                                   num_of_images, batch_size)
+                                   num_of_images)
         self.name = 'ASEF'
         self.fwhm = fwhm
 
-    def synthesis(self, target_size=(100, 100), num_of_images_last=False, peak_coordinates: np.ndarray = np.zeros(1))\
-            -> np.ndarray:
+    def synthesis(
+            self, target_size=(100, 100), num_of_images_last=False, peak_coordinates: np.ndarray = np.zeros(1)
+    ) -> np.ndarray:
         """
         ASEF correlation filter.
         :param num_of_images_last: axis responsible for the number of images in the set.
@@ -481,19 +481,14 @@ class ASEF(CorrelationFilter):
         :param peak_coordinates: gt coordinates of correlation peak.
         :return: obtained OT MACH correlation filter.
         """
-        datagen = CFDataset(gt_label=self.gt_label, num_of_images=self.num_of_images,
-                            inverse=self.inverse)
+        datagen = CFDataset(pos_class_label=self.gt_label, num_of_images=self.num_of_images, inverse=self.inverse)
         if isinstance(self.images, str):
             train_images = datagen.prepare_data_from_directory(
-                train_path=self.images,
-                train_labels_path=self.labels,
-                target_size=target_size
+                train_path=self.images, train_labels_path=self.labels, target_size=target_size
             )
         else:
             train_images = datagen.prepare_data_from_array(
-                train_images=self.images,
-                train_labels=self.labels,
-                num_of_images_last=num_of_images_last,
+                train_images=self.images, train_labels=self.labels, num_of_images_last=num_of_images_last,
             )
 
         img_number, height, width = train_images.shape
@@ -524,35 +519,35 @@ class ASEF(CorrelationFilter):
 
 class MOSSE(ASEF):
     def __init__(self, images, gt_label, labels,  metric_names=None,  inverse=False, filter_plane='freq',
-                 peak_classifier='pcnn', num_of_images=1000, batch_size=32, fwhm=1):
+                 peak_classifier='pcnn', num_of_images=1000, fwhm=1) -> None:
+        """
+        MOSSE correlation filter class.
+        """
         super(MOSSE, self).__init__(images, labels, gt_label, metric_names, inverse, filter_plane, peak_classifier,
-                                    num_of_images, batch_size)
+                                    num_of_images)
         self.fwhm = fwhm
         self.name = 'MOSSE'
 
-    def synthesis(self, target_size=(100, 100), num_of_images_last=False, peak_coordinates: np.ndarray = np.zeros(1))\
-            -> np.ndarray:
+    def synthesis(
+            self, target_size: Tuple[int, int] = (100, 100), num_of_images_last: bool = False,
+            peak_coordinates: np.ndarray = np.zeros(1)
+    ) -> np.ndarray:
         """
-        MOSSE correlation filter.
+        Method for MOSSE correlation filter synthesis.
         :param num_of_images_last: axis responsible for the number of images in the set.
         :param target_size: desired filter size.
         :param peak_coordinates: gt coordinates of correlation peak.
         :return: obtained MOSSE correlation filter.
         """
-        datagen = CFDataset(gt_label=self.gt_label, num_of_images=self.num_of_images,
-                            inverse=self.inverse)
+        datagen = CFDataset(pos_class_label=self.gt_label, num_of_images=self.num_of_images, inverse=self.inverse)
         print('labels', self.labels)
         if isinstance(self.images, str):
             train_images = datagen.prepare_data_from_directory(
-                train_path=self.images,
-                train_labels_path=self.labels,
-                target_size=target_size
+                train_path=self.images, train_labels_path=self.labels, target_size=target_size
             )
         else:
             train_images = datagen.prepare_data_from_array(
-                train_images=self.images,
-                train_labels=self.labels,
-                num_of_images_last=num_of_images_last,
+                train_images=self.images, train_labels=self.labels, num_of_images_last=num_of_images_last,
             )
 
         img_number, height, width = train_images.shape
@@ -568,30 +563,29 @@ class MOSSE(ASEF):
 
 
 class MINACE(CorrelationFilter):
-
-    def synthesis(self, target_size=(100, 100), num_of_images_last=False, noise_level: int = 2, nu: float = 0.0) \
-            -> np.ndarray:
+    """
+    MINACE correlation filter class.
+    """
+    def synthesis(
+            self, target_size: Tuple[int, int] = (100, 100), num_of_images_last: bool = False,
+            noise_level: int = 2, nu: float = 0.0
+    ) -> np.ndarray:
         """
-            MINACE correlation filter.
-            :param num_of_images_last: axis responsible for the number of images in the set.
-            :param noise_level: noise level for noise matrix.
-            :param nu: noise matrix coefficient.
-            :param target_size: desired filter size.
-            :return: obtained MINACE correlation filter.
+        Method for MINACE correlation filter synthesis.
+        :param num_of_images_last: axis responsible for the number of images in the set.
+        :param noise_level: noise level for noise matrix.
+        :param nu: noise matrix coefficient.
+        :param target_size: desired filter size.
+        :return: obtained MINACE correlation filter.
         """
-        datagen = CFDataset(gt_label=self.gt_label, num_of_images=self.num_of_images,
-                            inverse=self.inverse)
+        datagen = CFDataset(pos_class_label=self.gt_label, num_of_images=self.num_of_images, inverse=self.inverse)
         if isinstance(self.images, str):
             train_images = datagen.prepare_data_from_directory(
-                train_path=self.images,
-                train_labels_path=self.labels,
-                target_size=target_size
+                train_path=self.images, train_labels_path=self.labels, target_size=target_size
             )
         else:
             train_images = datagen.prepare_data_from_array(
-                train_images=self.images,
-                train_labels=self.labels,
-                num_of_images_last=num_of_images_last,
+                train_images=self.images, train_labels=self.labels, num_of_images_last=num_of_images_last,
             )
 
         img_number, height, width = train_images.shape
@@ -617,7 +611,7 @@ class MINACE(CorrelationFilter):
     @staticmethod
     def fft2(image: np.ndarray, axes: Tuple[int, int] = (-2, -1)) -> np.ndarray:
         """
-        Direct 2D Fourier transform for the image.
+        Method for applying direct 2D Fourier transforms for the image.
         :param image: image array.
         :param axes: axes over which to compute the FFT.
         :return: Fourier transform of the image.
@@ -625,31 +619,30 @@ class MINACE(CorrelationFilter):
         return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(image, axes=axes), axes=axes), axes=axes)
 
 
-class OT_MACH(CorrelationFilter):
-
-    def synthesis(self, target_size=(100, 100), num_of_images_last=False, alpha: float = 1.0, beta: float = 1.0)\
-            -> np.ndarray:
+class OTMACH(CorrelationFilter):
+    """
+    OT MACH correlation filter class.
+    """
+    def synthesis(
+            self, target_size: Tuple[int, int] = (100, 100), num_of_images_last: bool = False,
+            alpha: float = 1.0, beta: float = 1.0
+    ) -> np.ndarray:
         """
-        OT MACH correlation filter.
+        Method for OT MACH correlation filter synthesis.
         :param num_of_images_last: axis responsible for the number of images in the set.
         :param target_size: desired filter size.
         :param alpha: S matrix coefficient.
         :param beta: D matrix coefficient.
         :return: obtained OT MACH correlation filter.
         """
-        datagen = CFDataset(gt_label=self.gt_label, num_of_images=self.num_of_images,
-                            inverse=self.inverse)
+        datagen = CFDataset(pos_class_label=self.gt_label, num_of_images=self.num_of_images, inverse=self.inverse)
         if isinstance(self.images, str):
             train_images = datagen.prepare_data_from_directory(
-                train_path=self.images,
-                train_labels_path=self.labels,
-                target_size=target_size
+                train_path=self.images, train_labels_path=self.labels, target_size=target_size
             )
         else:
             train_images = datagen.prepare_data_from_array(
-                train_images=self.images,
-                train_labels=self.labels,
-                num_of_images_last=num_of_images_last,
+                train_images=self.images, train_labels=self.labels, num_of_images_last=num_of_images_last,
             )
 
         img_number, height, width = train_images.shape

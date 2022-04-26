@@ -2,7 +2,7 @@ from typing import Tuple, Optional
 from tensorflow import keras
 from keras.layers import Dense, Conv2D, BatchNormalization, GlobalAveragePooling2D, Input, Add, Activation
 from tensorflow.python.framework.ops import Tensor
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from keras.preprocessing.image import ImageDataGenerator
 import numpy as np
 from Correlation_utils import Correlator
 import pandas as pd
